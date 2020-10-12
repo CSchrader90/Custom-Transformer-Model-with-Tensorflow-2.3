@@ -136,10 +136,10 @@ input_sentence = args.input_string
 word_embeddings, word_dict = embeddings.load_input_embeddings()
 input_sentence = input_sentence.translate(str.maketrans('', '', string.punctuation))
 split_sentence = [w.lower() for w in input_sentence.split()] #tokenize sentence and remove capitalisation
-embed_sen = embeddings.glove_embeddings(word_embeddings, word_dict, split_sentence, embeddings.EMBEDDING_SIZE)
+embed_sen = embeddings.glove_embeddings(word_embeddings, word_dict, split_sentence, embeddings.INPUT_EMBEDDING_SIZE)
 
 #get the positional encodings
-posit_encodings = embeddings.posit_encode(len(input_sentence.split()), embeddings.EMBEDDING_SIZE)
+posit_encodings = embeddings.posit_encode(len(input_sentence.split()), embeddings.INPUT_EMBEDDING_SIZE)
 
 #Add sentence embedding with positional encoding
 encoded_input = tf.cast(tf.add(embed_sen, posit_encodings), dtype=tf.float32)
@@ -158,7 +158,7 @@ Encoder_Stack_output = output
 
 #Feed through Decoder stack
 Decoder_Stack = [Decoder(DECODER_ATTENTION_HEAD_DIM, NUMBER_HEADS, FFN_INTERNAL_DIM) for i in range(NUMBER_DECODERS)]
-Final_Layers = FinalLayers(embeddings.FINNISH_EMBEDDING_SIZE, embeddings.OUTPUT_VOCAB_SIZE)
+Final_Layers = FinalLayers(embeddings.OUTPUT_EMBEDDING_SIZE, embeddings.OUTPUT_VOCAB_SIZE)
 
 output_word_idx = 1 #1-based
 
