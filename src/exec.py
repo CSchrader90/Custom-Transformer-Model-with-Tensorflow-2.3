@@ -1,6 +1,4 @@
 import tensorflow as tf
-import numpy as np
-import argparse
 import string
 from word_embeddings import embeddings
 
@@ -27,26 +25,31 @@ OUTPUT_VOCAB_DIR = "../lib/python3.7/site-packages/word_embeddings/fastTextFinni
 ENGLISH_SENTENCES = "./english_sentences.txt"
 FINNISH_SENTENCES = "./finnish_sentences.txt"
 
+# Variable Initialisers
+initializer = tf.initializers.glorot_uniform()
+zero_init = tf.zeros_initializer()
 
-def attention_eval(key, value, query, dim):
-    softmax = tf.nn.softmax(tf.matmul(query, tf.transpose(key)/np.sqrt(dim)))
+
+def attention_eval(query, key, value, denominator):
+    softmax = tf.nn.softmax(tf.math.divide(tf.matmul(query, tf.transpose(key)), denominator))
 
     return tf.matmul(softmax, value)
 
 
 class SelfAttentionHead:
     def __init__(self, attention_dim):
-        self._KeyMat = tf.Variable(initializer((attention_dim, attention_dim)), name="KeyMat", trainable=True, dtype=tf.float32)
         self._QueryMat = tf.Variable(initializer((attention_dim, attention_dim)), name="QueryMat", trainable=True, dtype=tf.float32)
+        self._KeyMat = tf.Variable(initializer((attention_dim, attention_dim)), name="KeyMat", trainable=True, dtype=tf.float32)
         self._ValueMat = tf.Variable(initializer((attention_dim, attention_dim)), name="ValueMat", trainable=True, dtype=tf.float32)
-        weights.append([self._KeyMat, self._QueryMat, self._ValueMat])
+        self._sqrt_dim = tf.math.sqrt(tf.cast(attention_dim, tf.float32))
+        weights.append([self._QueryMat, self._KeyMat,  self._ValueMat])
 
     def __call__(self, X):
+        query = tf.matmul(X, self._QueryMat)
         key = tf.matmul(X, self._KeyMat)
         value = tf.matmul(X, self._ValueMat)
-        query = tf.matmul(X, self._QueryMat)
 
-        return attention_eval(key, value, query, ENCODER_ATTENTION_HEAD_DIM)
+        return attention_eval(query, key, value, self._sqrt_dim)
 
 
 class MultiHeadAttention:
@@ -80,8 +83,9 @@ class FeedForwardNetwork:
 
 
 def add_and_normalise(X, Z):
+    epsilon = 1 # avoid nan occurring from 0 division with std
     comb = tf.add(X, Z)
-    std = tf.math.reduce_std(comb, axis=1, keepdims=True)
+    std = tf.add(tf.math.reduce_std(comb, axis=1, keepdims=True), tf.cast(epsilon, tf.float32))
     mean = tf.reduce_mean(comb, axis=1, keepdims=True)
 
     return tf.divide(tf.subtract(comb, mean), std)
@@ -92,9 +96,9 @@ class Encoder:
         self._self_attention = MultiHeadAttention(attention_dim, number_heads)
         self._feed_forward = FeedForwardNetwork(attention_dim, ffn_internal_dim)
 
-    def __call__(self, input):
-        z1 = self._self_attention(input)
-        z2 = add_and_normalise(input, z1)
+    def __call__(self, X):
+        z1 = self._self_attention(X)
+        z2 = add_and_normalise(X, z1)
         z3 = self._feed_forward(z2)
         z4 = add_and_normalise(z2, z3)
 
@@ -123,7 +127,7 @@ class Decoder:
         query = tf.matmul(z2, self._query_weights)
         key = tf.matmul(encoder_output, self._enc_dec_key_w)
         val = tf.matmul(encoder_output, self._enc_dec_val_w)
-        enc_dec_att = attention_eval(key, val, query, attention_dim)
+        enc_dec_att = attention_eval(query, key, val, attention_dim)
         z3 = add_and_normalise(z2, enc_dec_att)
 
         # Feed-forward layer
@@ -162,7 +166,9 @@ class Transformer(tf.Module):
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None, ENCODER_ATTENTION_HEAD_DIM), dtype=tf.float32),
                                   tf.TensorSpec(shape=(), dtype=tf.int32)])
-    def __call__(self, encoded_input_sentence, out_length):
+    def __call__(self, encoded_input_sentence, sentence_length):
+
+        out_tensor_array = tf.TensorArray(tf.float32, size=sentence_length)
 
         for enc_idx in range(0, NUMBER_ENCODERS):
             if enc_idx == 0:
@@ -172,24 +178,20 @@ class Transformer(tf.Module):
         last_encoder_output = encoder_output
 
         output_word_idx = 1  # 1-based
-        decoder_posit = embeddings.posit_encode(output_word_idx, embeddings.OUTPUT_EMBEDDING_SIZE)
+        decoder_posit = embeddings.posit_encode(output_word_idx - 1, embeddings.OUTPUT_EMBEDDING_SIZE)
         decoder_input = tf.add(self._last_decoder_output, decoder_posit)
 
-        decoder_output_sentence = tf.TensorArray(tf.float32, size=out_length, element_shape=(1, embeddings.OUTPUT_VOCAB_SIZE))
-        decoder_output = initializer((1, DECODER_ATTENTION_HEAD_DIM), dtype=tf.float32)
-        for out_sen_idx in range(out_length):
-            tf.autograph.experimental.set_loop_options(
-                shape_invariants=[(decoder_output, tf.TensorShape([None, DECODER_ATTENTION_HEAD_DIM]))])
-            for dec_num in range(NUMBER_DECODERS):
-                if out_sen_idx == 0:
-                    decoder_output = self._decoder_Stack[dec_num](decoder_input, DECODER_ATTENTION_HEAD_DIM, last_encoder_output)
-                else:
-                    decoder_output = self._decoder_Stack[dec_num](decoder_output, DECODER_ATTENTION_HEAD_DIM, last_encoder_output)
+        for out_sen_idx in range(sentence_length):
+            decoder_output = self._decoder_Stack[0](decoder_input, DECODER_ATTENTION_HEAD_DIM,
+                                                          last_encoder_output)
+
+            for dec_num in range(1, NUMBER_DECODERS):
+                decoder_output = self._decoder_Stack[dec_num](decoder_output, DECODER_ATTENTION_HEAD_DIM, last_encoder_output)
             last_decoder_output = decoder_output
 
             # pass through linear layer & softmax
             last_layer_output = self._final_Layers(last_decoder_output)
-            decoder_output_sentence.write(out_sen_idx, last_layer_output)
+            out_tensor_array = out_tensor_array.write(out_sen_idx, last_layer_output)
 
             # feed word back to input of decoder stack
             output_word_idx += 1
@@ -197,11 +199,11 @@ class Transformer(tf.Module):
             new_input = tf.add(last_decoder_output, decoder_posit[output_word_idx - 1, :])
             decoder_input = tf.concat([decoder_input, new_input], 0)
 
-        return decoder_output_sentence.concat()
+        return out_tensor_array.concat()
 
 
 def loss(target, predicted):
-    return tf.losses.kullback_leibler_divergence(tf.reshape(target, (1, -1)), tf.reshape(predicted, (1, -1)))
+    return tf.losses.kullback_leibler_divergence(target, tf.reshape(predicted, (1, -1)))
 
 
 def output_dict_idx(dictionary, search_word):
@@ -210,10 +212,6 @@ def output_dict_idx(dictionary, search_word):
     else:
         return 0
 
-
-# Variable Initialisers
-initializer = tf.initializers.glorot_uniform()
-zero_init = tf.zeros_initializer()
 
 # fetch training data
 train_in_data = open(ENGLISH_SENTENCES)
@@ -240,6 +238,7 @@ weights = []
 optimizer = tf.optimizers.Adam(LEARNING_RATE)
 
 transformer = Transformer(ENCODER_ATTENTION_HEAD_DIM, NUMBER_HEADS, FFN_INTERNAL_DIM, DECODER_ATTENTION_HEAD_DIM, NUMBER_ENCODERS, NUMBER_DECODERS)
+
 for sentence_idx in range(num_sentences):
 
     # Encoding input sentence
@@ -247,23 +246,21 @@ for sentence_idx in range(num_sentences):
     enc_posit_encodings = tf.constant(embeddings.posit_encode(len(input_sentence), embeddings.INPUT_EMBEDDING_SIZE))
     embedded_input_sentence = embeddings.glove_embeddings(word_embeddings, word_dict, input_sentence,
                                                     embeddings.INPUT_EMBEDDING_SIZE)
-    encoded_input = tf.cast(tf.add(embedded_input_sentence, enc_posit_encodings), dtype=tf.float32)
+    encoder_input = tf.cast(tf.add(embedded_input_sentence, enc_posit_encodings), dtype=tf.float32)
 
     # Encoding target sentence
     output_sentence = train_out_sentences[sentence_idx]
-    dec_posit_encodings = tf.constant(embeddings.posit_encode(len(output_sentence), embeddings.OUTPUT_EMBEDDING_SIZE))
     embedded_output_sentence = tf.one_hot(output_dict_idx(output_dict, output_sentence[0]), depth=embeddings.OUTPUT_VOCAB_SIZE, dtype=tf.float32)
-
     for out_word_idx in range(1, len(output_sentence)):
         cur_word = output_sentence[out_word_idx]
         embedded_output_sentence = tf.concat([embedded_output_sentence, tf.one_hot(output_dict_idx(output_dict, output_sentence[sentence_idx]), depth=embeddings.OUTPUT_VOCAB_SIZE)], axis=0)
 
-    embedded_output_sentence = tf.reshape(embedded_output_sentence, (1, -1))
     with tf.GradientTape() as tape:
-        transformer_output = transformer(encoded_input, len(output_sentence))
+        transformer_output = transformer(encoder_input, len(output_sentence))
+        cur_loss = loss(embedded_output_sentence, transformer_output)
 
-    cur_loss = loss(embedded_output_sentence, transformer_output)
     grads = tape.gradient(cur_loss, weights)
 
     for i in range(len(grads)):
         optimizer.apply_gradients(zip(grads[i], weights[i]))
+    print(f"Gradients applied for sentence {sentence_idx}")
