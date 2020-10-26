@@ -18,12 +18,11 @@ NUMBER_DECODERS = 6
 LEARNING_RATE = 0.01
 
 # Output vocab directory
-OUTPUT_VOCAB_DIR = "../lib/python3.7/site-packages/word_embeddings/fastTextFinnish100d.csv"
-
+OUTPUT_VOCAB_DIR = ""
 
 # Input/Output training sentences
-ENGLISH_SENTENCES = "./english_sentences.txt"
-FINNISH_SENTENCES = "./finnish_sentences.txt"
+INPUT_SENTENCES = ""
+OUTPUT_SENTENCES = ""
 
 # Variable Initialisers
 initializer = tf.initializers.glorot_uniform()
@@ -178,12 +177,11 @@ class Transformer(tf.Module):
         last_encoder_output = encoder_output
 
         output_word_idx = 1  # 1-based
-        decoder_posit = embeddings.posit_encode(output_word_idx - 1, embeddings.OUTPUT_EMBEDDING_SIZE)
+        decoder_posit = embeddings.posit_encode(output_word_idx, embeddings.OUTPUT_EMBEDDING_SIZE)
         decoder_input = tf.add(self._last_decoder_output, decoder_posit)
 
         for out_sen_idx in range(sentence_length):
-            decoder_output = self._decoder_Stack[0](decoder_input, DECODER_ATTENTION_HEAD_DIM,
-                                                          last_encoder_output)
+            decoder_output = self._decoder_Stack[0](decoder_input, DECODER_ATTENTION_HEAD_DIM, last_encoder_output)
 
             for dec_num in range(1, NUMBER_DECODERS):
                 decoder_output = self._decoder_Stack[dec_num](decoder_output, DECODER_ATTENTION_HEAD_DIM, last_encoder_output)
@@ -214,9 +212,10 @@ def output_dict_idx(dictionary, search_word):
 
 
 # fetch training data
-train_in_data = open(ENGLISH_SENTENCES)
-train_out_data = open(FINNISH_SENTENCES)
+train_in_data = open(INPUT_SENTENCES)
+train_out_data = open(OUTPUT_SENTENCES)
 
+# pre-process training sentences
 train_in_sentences = [line.split() for line in train_in_data]
 train_out_sentences = [line.split() for line in train_out_data]
 
@@ -234,11 +233,16 @@ word_embeddings, word_dict = embeddings.load_input_embeddings()
 # output embeddings
 output_vocab_list, output_dict = embeddings.get_output_dict(OUTPUT_VOCAB_DIR)
 
+# initialise weights
 weights = []
+
+# define optimiser
 optimizer = tf.optimizers.Adam(LEARNING_RATE)
 
+# instantiate transformer object
 transformer = Transformer(ENCODER_ATTENTION_HEAD_DIM, NUMBER_HEADS, FFN_INTERNAL_DIM, DECODER_ATTENTION_HEAD_DIM, NUMBER_ENCODERS, NUMBER_DECODERS)
 
+# train
 for sentence_idx in range(num_sentences):
 
     # Encoding input sentence
@@ -263,4 +267,3 @@ for sentence_idx in range(num_sentences):
 
     for i in range(len(grads)):
         optimizer.apply_gradients(zip(grads[i], weights[i]))
-    print(f"Gradients applied for sentence {sentence_idx}")
