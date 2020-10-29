@@ -17,6 +17,9 @@ An implementation of the Transformer Deep Learning Architecture that can be easi
 The tf.function decorator is used with an input signature for the __call__(self, encoded_input, output_length) method. This instructs Tensorflow to build the graph and will avoid retracing for different length inputs/outputs.
 
 
+Positional embeddings are used as specified in the original paper (Attention Is All You Need) which introduces the positional information into the sentences which when used with the self-attention and encoder-decoder attention mechanisms, allows more parallel processing without losing temporal information.
+
+
 ## Running
 
 Set the parameters within exec.py to define the exact architecture of the transformer + the input/output sources for embedded vocabularies and trainings sentences.
@@ -33,3 +36,6 @@ This will then require an efficient means of nearest neighbour search to infer t
 
 
 The loss will stop accumulating during the training phase once the predicted output sentence reaches the length of the target output sentence. This should be adjusted to recognise end of sentence.
+
+
+This architecure allows for the utilisation of Tensor Processing Units (TPUs) which is a further step of optimisation of training.
